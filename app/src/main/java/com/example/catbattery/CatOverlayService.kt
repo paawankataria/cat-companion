@@ -78,30 +78,33 @@ class CatOverlayService : Service() {
         widget = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(7), dp(5), dp(13), dp(5))
-            elevation = dp(7).toFloat()
+            setPadding(dp(2), dp(2), dp(2), dp(2))
+            clipChildren = false
+            clipToPadding = false
         }
         val cat = ImageView(this).apply {
             setImageResource(R.drawable.cat_companion)
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "Cat companion"
         }
-        widget.addView(cat, LinearLayout.LayoutParams(dp(47), dp(51)))
+        widget.addView(cat, LinearLayout.LayoutParams(dp(106), dp(116)))
 
         infoPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(7), dp(3), dp(2), dp(3))
+            gravity = Gravity.CENTER
+            setPadding(dp(8), dp(8), dp(8), dp(8))
         }
-        clockText = text(20, Color.rgb(53, 43, 50), true)
-        batteryText = text(12, Color.rgb(71, 59, 66))
-        healthText = text(11, Color.rgb(95, 81, 88))
-        timezoneText = text(11, Color.rgb(95, 81, 88))
+        clockText = text(18, Color.rgb(53, 43, 50), true)
+        batteryText = text(11, Color.rgb(71, 59, 66))
+        healthText = text(10, Color.rgb(95, 81, 88))
+        timezoneText = text(9, Color.rgb(95, 81, 88))
         infoPanel.addView(clockText)
         infoPanel.addView(batteryText)
         infoPanel.addView(healthText)
         infoPanel.addView(timezoneText)
-        widget.addView(infoPanel, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+        widget.addView(infoPanel, LinearLayout.LayoutParams(dp(112), dp(112)).apply {
+            marginStart = dp(3)
+        })
 
         @Suppress("DEPRECATION")
         val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
@@ -126,6 +129,7 @@ class CatOverlayService : Service() {
     private fun text(size: Int, color: Int, bold: Boolean = false) = TextView(this).apply {
         textSize = size.toFloat()
         setTextColor(color)
+        gravity = Gravity.CENTER
         if (bold) setTypeface(null, Typeface.BOLD)
         maxLines = 1
     }
@@ -179,7 +183,7 @@ class CatOverlayService : Service() {
         val is24Hour = preferences.getBoolean("use_24_hour", DateFormat.is24HourFormat(this))
         val format = if (is24Hour) "HH:mm" else "h:mm a"
         clockText.text = SimpleDateFormat(format, Locale.getDefault()).format(Date())
-        timezoneText.text = "Time zone · ${TimeZone.getDefault().getDisplayName(false, TimeZone.SHORT, Locale.getDefault())}"
+        timezoneText.text = TimeZone.getDefault().getDisplayName(false, TimeZone.SHORT, Locale.getDefault())
     }
 
     private fun updateBattery(intent: Intent) {
@@ -194,8 +198,8 @@ class CatOverlayService : Service() {
     private fun updateBatteryViews() {
         if (!::batteryText.isInitialized) return
         val charging = latestStatus == BatteryManager.BATTERY_STATUS_CHARGING || latestStatus == BatteryManager.BATTERY_STATUS_FULL
-        batteryText.text = if (charging) "Battery · $latestLevel%  ⚡" else "Battery · $latestLevel%"
-        healthText.text = "Battery status · ${healthLabel(latestHealth)}"
+        batteryText.text = if (charging) "🔋 $latestLevel%  ⚡" else "🔋 $latestLevel%"
+        healthText.text = "Health · ${healthLabel(latestHealth)}"
     }
 
     private fun healthLabel(health: Int): String = when (health) {
@@ -217,10 +221,12 @@ class CatOverlayService : Service() {
         val color = preferences.getInt("tint_color", Color.rgb(177, 155, 217))
         val strength = preferences.getInt("tint_strength", 28).coerceIn(0, 60) / 100f
         val tint = blend(Color.rgb(255, 249, 247), color, strength)
-        widget.background = GradientDrawable().apply {
+        widget.background = null
+        infoPanel.background = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
             setColor(tint)
-            cornerRadius = dp(24).toFloat()
             setStroke(dp(1), blend(tint, Color.WHITE, 0.65f))
+            alpha = 230
         }
         if (viewAdded) try { windowManager.updateViewLayout(widget, params) } catch (_: Exception) { }
     }
