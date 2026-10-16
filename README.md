@@ -1,6 +1,6 @@
 # Cat Companion (Kotlin)
 
-A cute, movable floating cat for OnePlus and other Android phones. It can show the local time, battery percentage, Android's current battery status, and time zone. Choose a soft lilac, blush, mint, sky, or peach tint and adjust its strength. The cat artwork and launcher icon use the cat images supplied for this project.
+A cute, movable floating cat for OnePlus and other Android phones. The floating cat animates through six poses; the launcher icon is a transparent cat cutout with no background. It can show the local time, battery percentage, Android's current battery status, and time zone. Choose a soft lilac, blush, mint, sky, or peach tint and adjust its strength. The cat artwork uses the images supplied for this project.
 
 A regular app cannot replace the OxygenOS status bar battery icon, so Cat Companion floats above other apps instead. Weather is not included because it needs a weather provider and API key.
 

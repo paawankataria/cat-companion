@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.graphics.drawable.AnimationDrawable
 import android.graphics.drawable.GradientDrawable
 import android.os.BatteryManager
 import android.os.Build
@@ -37,12 +38,14 @@ class CatOverlayService : Service() {
     private lateinit var windowManager: WindowManager
     private lateinit var widget: LinearLayout
     private lateinit var infoPanel: LinearLayout
+    private lateinit var catImage: ImageView
     private lateinit var clockText: TextView
     private lateinit var batteryText: TextView
     private lateinit var healthText: TextView
     private lateinit var timezoneText: TextView
     private lateinit var params: WindowManager.LayoutParams
     private var batteryReceiver: BroadcastReceiver? = null
+    private var catAnimation: AnimationDrawable? = null
     private var latestLevel = 0
     private var latestHealth = BatteryManager.BATTERY_HEALTH_UNKNOWN
     private var latestStatus = BatteryManager.BATTERY_STATUS_UNKNOWN
@@ -59,6 +62,7 @@ class CatOverlayService : Service() {
         try {
             windowManager.addView(widget, params)
             viewAdded = true
+            catAnimation?.start()
         } catch (_: Exception) {
             preferences.edit().putBoolean("widget_showing", false).apply()
             stopSelf()
@@ -82,12 +86,25 @@ class CatOverlayService : Service() {
             clipChildren = false
             clipToPadding = false
         }
-        val cat = ImageView(this).apply {
-            setImageResource(R.drawable.cat_companion)
+        catImage = ImageView(this).apply {
             scaleType = ImageView.ScaleType.FIT_CENTER
+            adjustViewBounds = true
             contentDescription = "Cat companion"
         }
-        widget.addView(cat, LinearLayout.LayoutParams(dp(106), dp(116)))
+        catAnimation = AnimationDrawable().apply {
+            isOneShot = false
+            val frameResources = intArrayOf(
+                R.drawable.cat_animation_00,
+                R.drawable.cat_animation_01,
+                R.drawable.cat_animation_02,
+                R.drawable.cat_animation_03,
+                R.drawable.cat_animation_04,
+                R.drawable.cat_animation_05
+            )
+            frameResources.forEach { addFrame(resources.getDrawable(it, theme), 500) }
+        }
+        catImage.setImageDrawable(catAnimation)
+        widget.addView(catImage, LinearLayout.LayoutParams(dp(106), dp(116)))
 
         infoPanel = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -250,6 +267,7 @@ class CatOverlayService : Service() {
 
     override fun onDestroy() {
         mainHandler.removeCallbacks(clockUpdater)
+        catAnimation?.stop()
         batteryReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) { } }
         preferences.edit().putBoolean("widget_showing", false).apply()
         if (viewAdded) try { windowManager.removeView(widget) } catch (_: Exception) { }
