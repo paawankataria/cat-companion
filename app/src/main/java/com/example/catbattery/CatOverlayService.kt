@@ -5,11 +5,12 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Canvas
 import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
-import android.graphics.Typeface
-import android.graphics.drawable.AnimationDrawable
-import android.graphics.drawable.GradientDrawable
+import android.graphics.RectF
 import android.os.BatteryManager
 import android.os.Build
 import android.os.Handler
@@ -18,14 +19,11 @@ import android.os.Looper
 import android.text.format.DateFormat
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.View
 import android.view.WindowManager
-import android.widget.ImageView
-import android.widget.LinearLayout
-import android.widget.TextView
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.TimeZone
 
 class CatOverlayService : Service() {
     companion object {
@@ -33,103 +31,37 @@ class CatOverlayService : Service() {
         const val ACTION_REFRESH = "com.example.catbattery.REFRESH_WIDGET"
     }
 
-    private val mainHandler = Handler(Looper.getMainLooper())
     private val preferences by lazy { getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE) }
+    private val handler = Handler(Looper.getMainLooper())
     private lateinit var windowManager: WindowManager
-    private lateinit var widget: LinearLayout
-    private lateinit var infoPanel: LinearLayout
-    private lateinit var catImage: ImageView
-    private lateinit var clockText: TextView
-    private lateinit var batteryText: TextView
-    private lateinit var healthText: TextView
-    private lateinit var timezoneText: TextView
+    private lateinit var cat: CatWidgetView
     private lateinit var params: WindowManager.LayoutParams
-    private var batteryReceiver: BroadcastReceiver? = null
-    private var catAnimation: AnimationDrawable? = null
-    private var latestLevel = 0
-    private var latestHealth = BatteryManager.BATTERY_HEALTH_UNKNOWN
-    private var latestStatus = BatteryManager.BATTERY_STATUS_UNKNOWN
+    private var receiver: BroadcastReceiver? = null
     private var viewAdded = false
+    private var touchX = 0f
+    private var touchY = 0f
+    private var windowX = 0
+    private var windowY = 0
+    private var dragged = false
+    private var longPressed = false
+    private val longPress = Runnable {
+        longPressed = true
+        startActivity(Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+    }
 
     private fun dp(value: Int) = (value * resources.displayMetrics.density + 0.5f).toInt()
 
     override fun onCreate() {
         super.onCreate()
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
-        createWidget()
-        registerBatteryReceiver()
-        mainHandler.post(clockUpdater)
-        try {
-            windowManager.addView(widget, params)
-            viewAdded = true
-            catAnimation?.start()
-        } catch (_: Exception) {
-            preferences.edit().putBoolean("widget_showing", false).apply()
-            stopSelf()
-        }
-    }
-
-    @Suppress("DEPRECATION")
-    private fun registerBatteryReceiver() {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) = updateBattery(intent)
-        }
-        batteryReceiver = receiver
-        registerReceiver(receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.let { updateBattery(it) }
-    }
-
-    private fun createWidget() {
-        widget = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
-            setPadding(dp(2), dp(2), dp(2), dp(2))
-            clipChildren = false
-            clipToPadding = false
-        }
-        catImage = ImageView(this).apply {
-            scaleType = ImageView.ScaleType.FIT_CENTER
-            adjustViewBounds = true
-            contentDescription = "Cat companion"
-        }
-        catAnimation = AnimationDrawable().apply {
-            isOneShot = false
-            val frameResources = intArrayOf(
-                R.drawable.cat_animation_00,
-                R.drawable.cat_animation_01,
-                R.drawable.cat_animation_02,
-                R.drawable.cat_animation_03,
-                R.drawable.cat_animation_04,
-                R.drawable.cat_animation_05
-            )
-            frameResources.forEach { addFrame(resources.getDrawable(it, theme), 500) }
-        }
-        catImage.setImageDrawable(catAnimation)
-        widget.addView(catImage, LinearLayout.LayoutParams(dp(106), dp(116)))
-
-        infoPanel = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setPadding(dp(8), dp(8), dp(8), dp(8))
-        }
-        clockText = text(18, Color.rgb(53, 43, 50), true)
-        batteryText = text(11, Color.rgb(71, 59, 66))
-        healthText = text(10, Color.rgb(95, 81, 88))
-        timezoneText = text(9, Color.rgb(95, 81, 88))
-        infoPanel.addView(clockText)
-        infoPanel.addView(batteryText)
-        infoPanel.addView(healthText)
-        infoPanel.addView(timezoneText)
-        widget.addView(infoPanel, LinearLayout.LayoutParams(dp(112), dp(112)).apply {
-            marginStart = dp(3)
-        })
+        cat = CatWidgetView(this, preferences)
+        cat.setOnTouchListener { _, event -> handleTouch(event) }
 
         @Suppress("DEPRECATION")
         val windowType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
         params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            windowType,
+            dp(132), dp(148), windowType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
         ).apply {
@@ -137,118 +69,260 @@ class CatOverlayService : Service() {
             x = dp(8)
             y = dp(44)
         }
-        widget.setOnTouchListener { _, event -> handleTouch(event) }
-        updateDisplayedContent()
-        updateClock()
-        updateBatteryViews()
-    }
 
-    private fun text(size: Int, color: Int, bold: Boolean = false) = TextView(this).apply {
-        textSize = size.toFloat()
-        setTextColor(color)
-        gravity = Gravity.CENTER
-        if (bold) setTypeface(null, Typeface.BOLD)
-        maxLines = 1
+        val batteryReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) {
+                val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, 0)
+                val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
+                val status = intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
+                cat.setBattery(if (scale > 0) level * 100 / scale else 0, status)
+            }
+        }
+        receiver = batteryReceiver
+        registerReceiver(batteryReceiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED))?.let {
+            batteryReceiver.onReceive(this, it)
+        }
+        applyPreferences()
+        try {
+            windowManager.addView(cat, params)
+            viewAdded = true
+        } catch (_: Exception) {
+            preferences.edit().putBoolean("widget_showing", false).apply()
+            stopSelf()
+        }
     }
 
     private fun handleTouch(event: MotionEvent): Boolean {
         when (event.action) {
             MotionEvent.ACTION_DOWN -> {
-                touchStartX = event.rawX
-                touchStartY = event.rawY
-                initialX = params.x
-                initialY = params.y
-                moved = false
+                touchX = event.rawX
+                touchY = event.rawY
+                windowX = params.x
+                windowY = params.y
+                dragged = false
+                longPressed = false
+                handler.postDelayed(longPress, 550L)
                 return true
             }
             MotionEvent.ACTION_MOVE -> {
-                val dx = (touchStartX - event.rawX).toInt()
-                val dy = (event.rawY - touchStartY).toInt()
-                if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(4)) moved = true
-                params.x = (initialX + dx).coerceAtLeast(0)
-                params.y = (initialY + dy).coerceAtLeast(0)
-                if (viewAdded) try { windowManager.updateViewLayout(widget, params) } catch (_: Exception) { }
+                val dx = (touchX - event.rawX).toInt()
+                val dy = (event.rawY - touchY).toInt()
+                if (kotlin.math.abs(dx) + kotlin.math.abs(dy) > dp(6)) {
+                    dragged = true
+                    handler.removeCallbacks(longPress)
+                    params.x = (windowX + dx).coerceAtLeast(0)
+                    params.y = (windowY + dy).coerceAtLeast(0)
+                    if (viewAdded) try { windowManager.updateViewLayout(cat, params) } catch (_: Exception) { }
+                }
                 return true
             }
             MotionEvent.ACTION_UP -> {
-                if (!moved) {
-                    val open = Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                    startActivity(open)
-                }
+                handler.removeCallbacks(longPress)
+                if (!dragged && !longPressed) cat.playCuddle()
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                handler.removeCallbacks(longPress)
                 return true
             }
         }
         return true
     }
 
-    private var touchStartX = 0f
-    private var touchStartY = 0f
-    private var initialX = 0
-    private var initialY = 0
-    private var moved = false
+    private fun applyPreferences() {
+        if (::cat.isInitialized) cat.setOptions(
+            showClock = preferences.getBoolean("show_clock", true),
+            showBattery = preferences.getBoolean("show_battery", true),
+            color = preferences.getInt("tint_color", Color.rgb(177, 155, 217)),
+            tintStrength = preferences.getInt("tint_strength", 28).coerceIn(0, 60) / 60f
+        )
+    }
 
-    private val clockUpdater = object : Runnable {
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_REFRESH) applyPreferences()
+        return START_STICKY
+    }
+
+    override fun onDestroy() {
+        handler.removeCallbacks(longPress)
+        receiver?.let { try { unregisterReceiver(it) } catch (_: Exception) { } }
+        if (viewAdded) try { windowManager.removeView(cat) } catch (_: Exception) { }
+        preferences.edit().putBoolean("widget_showing", false).apply()
+        super.onDestroy()
+    }
+
+    override fun onBind(intent: Intent?): IBinder? = null
+}
+
+/** Draws the whole cat in one compact, transparent overlay. */
+private class CatWidgetView(context: Context, private val preferences: android.content.SharedPreferences) : View(context) {
+    private val frames = intArrayOf(
+        R.drawable.cat_neutral, R.drawable.cat_blink, R.drawable.cat_happy,
+        R.drawable.cat_cuddle, R.drawable.cat_sad, R.drawable.cat_sleep
+    ).map { android.graphics.BitmapFactory.decodeResource(resources, it) }
+    private val density = resources.displayMetrics.density
+    private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) }
+    private val catRect = RectF()
+    private val tailPath = Path()
+    private var battery = 0
+    private var displayedBattery = 0f
+    private var status = BatteryManager.BATTERY_STATUS_UNKNOWN
+    private var accent = Color.rgb(177, 155, 217)
+    private var tintStrength = 0.28f
+    private var showClock = true
+    private var showBattery = true
+    private var lastInteraction = System.currentTimeMillis()
+    private var cuddleUntil = 0L
+    private var lastFrame = 0
+    private var targetFrame = 0
+    private var transitionStarted = 0L
+    private var lastBlink = System.currentTimeMillis() + 6_000L
+    private var previousTick = System.currentTimeMillis()
+    private var happyUntil = 0L
+    private var nextHappyMoment = System.currentTimeMillis() + 12_000L
+
+    private val animator = object : Runnable {
         override fun run() {
-            updateClock()
-            val delay = 60_000L - (System.currentTimeMillis() % 60_000L)
-            mainHandler.postDelayed(this, delay)
+            val now = System.currentTimeMillis()
+            val delta = (now - previousTick).coerceIn(1L, 100L)
+            previousTick = now
+            val batteryEase = 1f - kotlin.math.exp(-delta / 260f)
+            displayedBattery += (battery - displayedBattery) * batteryEase
+            chooseMood()
+            invalidate()
+            postDelayed(this, 33L)
         }
     }
 
-    private fun updateClock() {
-        if (!::clockText.isInitialized) return
-        val is24Hour = preferences.getBoolean("use_24_hour", DateFormat.is24HourFormat(this))
-        val format = if (is24Hour) "HH:mm" else "h:mm a"
-        clockText.text = SimpleDateFormat(format, Locale.getDefault()).format(Date())
-        timezoneText.text = TimeZone.getDefault().getDisplayName(false, TimeZone.SHORT, Locale.getDefault())
+    init {
+        contentDescription = "Animated cat with time and battery level. Tap to cuddle; hold for settings; drag to move."
+        setLayerType(LAYER_TYPE_HARDWARE, null)
+        post(animator)
     }
 
-    private fun updateBattery(intent: Intent) {
-        val level = intent.getIntExtra(BatteryManager.EXTRA_LEVEL, 0)
-        val scale = intent.getIntExtra(BatteryManager.EXTRA_SCALE, 100)
-        latestLevel = if (scale > 0) level * 100 / scale else 0
-        latestHealth = intent.getIntExtra(BatteryManager.EXTRA_HEALTH, BatteryManager.BATTERY_HEALTH_UNKNOWN)
-        latestStatus = intent.getIntExtra(BatteryManager.EXTRA_STATUS, BatteryManager.BATTERY_STATUS_UNKNOWN)
-        updateBatteryViews()
+    fun setBattery(level: Int, batteryStatus: Int) {
+        battery = level.coerceIn(0, 100)
+        status = batteryStatus
+        invalidate()
     }
 
-    private fun updateBatteryViews() {
-        if (!::batteryText.isInitialized) return
-        val charging = latestStatus == BatteryManager.BATTERY_STATUS_CHARGING || latestStatus == BatteryManager.BATTERY_STATUS_FULL
-        batteryText.text = if (charging) "🔋 $latestLevel%  ⚡" else "🔋 $latestLevel%"
-        healthText.text = "Health · ${healthLabel(latestHealth)}"
+    fun setOptions(showClock: Boolean, showBattery: Boolean, color: Int, tintStrength: Float) {
+        this.showClock = showClock
+        this.showBattery = showBattery
+        accent = color
+        this.tintStrength = tintStrength * 0.55f
+        invalidate()
     }
 
-    private fun healthLabel(health: Int): String = when (health) {
-        BatteryManager.BATTERY_HEALTH_GOOD -> "Good"
-        BatteryManager.BATTERY_HEALTH_OVERHEAT -> "Overheating"
-        BatteryManager.BATTERY_HEALTH_DEAD -> "Dead"
-        BatteryManager.BATTERY_HEALTH_OVER_VOLTAGE -> "Over voltage"
-        BatteryManager.BATTERY_HEALTH_COLD -> "Cold"
-        BatteryManager.BATTERY_HEALTH_UNSPECIFIED_FAILURE -> "Needs attention"
-        else -> "Unknown"
+    fun playCuddle() {
+        lastInteraction = System.currentTimeMillis()
+        cuddleUntil = lastInteraction + 1_800L
+        transitionTo(3)
     }
 
-    private fun updateDisplayedContent() {
-        if (!::infoPanel.isInitialized) return
-        clockText.visibility = visible("show_clock")
-        batteryText.visibility = visible("show_battery")
-        healthText.visibility = visible("show_health")
-        timezoneText.visibility = visible("show_timezone")
-        val color = preferences.getInt("tint_color", Color.rgb(177, 155, 217))
-        val strength = preferences.getInt("tint_strength", 28).coerceIn(0, 60) / 100f
-        val tint = blend(Color.rgb(255, 249, 247), color, strength)
-        widget.background = null
-        infoPanel.background = GradientDrawable().apply {
-            shape = GradientDrawable.OVAL
-            setColor(tint)
-            setStroke(dp(1), blend(tint, Color.WHITE, 0.65f))
-            alpha = 230
+    private fun chooseMood() {
+        val now = System.currentTimeMillis()
+        if (now < cuddleUntil) {
+            transitionTo(3)
+            return
         }
-        if (viewAdded) try { windowManager.updateViewLayout(widget, params) } catch (_: Exception) { }
+        val next = when {
+            battery < 20 && status != BatteryManager.BATTERY_STATUS_CHARGING -> 4
+            status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL -> {
+                if (now >= nextHappyMoment && now >= happyUntil) {
+                    happyUntil = now + 1_100L
+                    nextHappyMoment = now + 14_000L
+                }
+                if (now < happyUntil) 3 else 2
+            }
+            now - lastInteraction > 60_000L -> 5
+            now < lastBlink -> 0
+            now - lastBlink < 360L -> 1
+            else -> { lastBlink = now + 6_000L; 0 }
+        }
+        transitionTo(next)
     }
 
-    private fun visible(key: String): Int = if (preferences.getBoolean(key, true)) android.view.View.VISIBLE else android.view.View.GONE
+    private fun transitionTo(frame: Int) {
+        if (targetFrame == frame) return
+        lastFrame = targetFrame
+        targetFrame = frame
+        transitionStarted = System.currentTimeMillis()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val now = System.currentTimeMillis()
+        val linearTransition = ((now - transitionStarted) / 420f).coerceIn(0f, 1f)
+        val transition = linearTransition * linearTransition * (3f - 2f * linearTransition)
+        val breathe = if (targetFrame == 5) 0.004f else 0.009f
+        val pulse = kotlin.math.sin(now / if (targetFrame == 5) 1_500f else 1_050f).toFloat() * breathe
+        val width = width.toFloat()
+        val height = height.toFloat()
+        val pad = 4f * density
+        catRect.set(pad, pad + height * 0.015f + height * pulse, width - pad, height - pad)
+        canvas.save()
+        canvas.scale(1f + pulse * 0.3f, 1f + pulse, catRect.centerX(), catRect.centerY())
+        if (transition < 1f) {
+            imagePaint.alpha = ((1f - transition) * 255).toInt()
+            canvas.drawBitmap(frames[lastFrame], null, catRect, imagePaint)
+        }
+        imagePaint.alpha = (transition * 255).toInt()
+        canvas.drawBitmap(frames[targetFrame], null, catRect, imagePaint)
+        imagePaint.alpha = 255
+        canvas.restore()
+
+        drawTailBattery(canvas)
+        if (showClock) drawClock(canvas)
+        if (showBattery) drawPercent(canvas)
+    }
+
+    private fun drawTailBattery(canvas: Canvas) {
+        val left = catRect.left
+        val top = catRect.top
+        val w = catRect.width()
+        val h = catRect.height()
+        tailPath.reset()
+        tailPath.moveTo(left + w * 0.72f, top + h * 0.78f)
+        tailPath.cubicTo(left + w * 0.90f, top + h * 0.83f, left + w * 0.97f, top + h * 0.76f, left + w * 0.88f, top + h * 0.69f)
+        val happy = targetFrame == 2 || targetFrame == 3
+        val swish = kotlin.math.sin(System.currentTimeMillis() / 450f).toFloat() * if (happy) 2.0f else 0.55f
+        canvas.save()
+        canvas.rotate(swish, left + w * 0.74f, top + h * 0.78f)
+        linePaint.strokeWidth = 3.2f * density
+        linePaint.color = Color.argb(100, 75, 66, 68)
+        canvas.drawPath(tailPath, linePaint)
+        linePaint.color = blend(Color.rgb(255, 249, 247), accent, tintStrength.coerceAtLeast(0.15f))
+        linePaint.alpha = 240
+        linePaint.strokeWidth = 2.4f * density
+        val measure = android.graphics.PathMeasure(tailPath, false)
+        val fill = Path()
+        measure.getSegment(0f, measure.length * displayedBattery / 100f, fill, true)
+        canvas.drawPath(fill, linePaint)
+        linePaint.alpha = 255
+        canvas.restore()
+    }
+
+    private fun drawClock(canvas: Canvas) {
+        val use24Hour = preferences.getBoolean("use_24_hour", DateFormat.is24HourFormat(context))
+        val format = if (use24Hour) "HH:mm" else "h:mm a"
+        val clock = SimpleDateFormat(format, Locale.getDefault()).format(Date())
+        textPaint.textSize = 12f * density
+        textPaint.color = Color.rgb(58, 48, 52)
+        textPaint.setShadowLayer(2f * density, 0f, 1f * density, Color.WHITE)
+        canvas.drawText(clock, catRect.centerX(), catRect.top + catRect.height() * 0.70f, textPaint)
+        textPaint.clearShadowLayer()
+    }
+
+    private fun drawPercent(canvas: Canvas) {
+        textPaint.textSize = 9f * density
+        textPaint.color = Color.rgb(58, 48, 52)
+        textPaint.setShadowLayer(2f * density, 0f, 1f * density, Color.WHITE)
+        canvas.drawText("$battery%", catRect.left + catRect.width() * 0.87f, catRect.top + catRect.height() * 0.89f, textPaint)
+        textPaint.clearShadowLayer()
+    }
 
     private fun blend(base: Int, tint: Int, amount: Float): Int = Color.rgb(
         (Color.red(base) * (1f - amount) + Color.red(tint) * amount).toInt(),
@@ -256,23 +330,8 @@ class CatOverlayService : Service() {
         (Color.blue(base) * (1f - amount) + Color.blue(tint) * amount).toInt()
     )
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_REFRESH) {
-            updateDisplayedContent()
-            updateClock()
-            updateBatteryViews()
-        }
-        return START_STICKY
+    override fun onDetachedFromWindow() {
+        removeCallbacks(animator)
+        super.onDetachedFromWindow()
     }
-
-    override fun onDestroy() {
-        mainHandler.removeCallbacks(clockUpdater)
-        catAnimation?.stop()
-        batteryReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) { } }
-        preferences.edit().putBoolean("widget_showing", false).apply()
-        if (viewAdded) try { windowManager.removeView(widget) } catch (_: Exception) { }
-        super.onDestroy()
-    }
-
-    override fun onBind(intent: Intent?): IBinder? = null
 }

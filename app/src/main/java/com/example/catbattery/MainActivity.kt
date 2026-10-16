@@ -55,7 +55,7 @@ class MainActivity : Activity() {
         hero.addView(heading, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
         content.addView(hero)
 
-        content.addView(label("A floating cat with the time, battery level, and Android's reported battery status. Weather can be added later if you choose a provider.", 14, Color.rgb(108, 90, 98)).apply {
+        content.addView(label("A tiny animated cat that keeps the time and battery close. Tap for a cuddle; press and hold for settings.", 14, Color.rgb(108, 90, 98)).apply {
             setPadding(dp(2), dp(14), dp(2), dp(16))
         })
 
@@ -71,7 +71,7 @@ class MainActivity : Activity() {
         })
 
         content.addView(sectionTitle("Soft color"))
-        content.addView(label("Choose a gentle background tint for the floating widget.", 13, Color.rgb(108, 90, 98)))
+        content.addView(label("Choose a soft accent for the battery glow on the cat's tail.", 13, Color.rgb(108, 90, 98)))
         val palette = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER
@@ -135,13 +135,7 @@ class MainActivity : Activity() {
         content.addView(sectionTitle("Show on the cat"))
         addPreferenceToggle(content, "Clock", "show_clock", true)
         addPreferenceToggle(content, "Battery level", "show_battery", true)
-        addPreferenceToggle(content, "Battery status", "show_health", true)
-        addPreferenceToggle(content, "Time zone", "show_timezone", true)
         addPreferenceToggle(content, "Use 24-hour time", "use_24_hour", false)
-
-        content.addView(label("Battery status is Android's current status (such as Good or Overheating), not a long-term battery health percentage.", 12, Color.rgb(126, 108, 115)).apply {
-            setPadding(dp(2), dp(8), dp(2), dp(2))
-        })
 
         setContentView(scroll)
         refreshPageState()
