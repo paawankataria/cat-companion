@@ -154,11 +154,11 @@ class CatOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 }
 
-/** Draws the whole cat in one compact, transparent overlay. */
+/** Draws the supplied cat artwork and applies small, eased motion without replacing its design. */
 private class CatWidgetView(context: Context, private val preferences: android.content.SharedPreferences) : View(context) {
     private val frames = intArrayOf(
-        R.drawable.cat_neutral, R.drawable.cat_blink, R.drawable.cat_happy,
-        R.drawable.cat_cuddle, R.drawable.cat_sad, R.drawable.cat_sleep
+        R.drawable.cat_animation_00, R.drawable.cat_animation_01, R.drawable.cat_animation_02,
+        R.drawable.cat_animation_03, R.drawable.cat_animation_04, R.drawable.cat_animation_05
     ).map { android.graphics.BitmapFactory.decodeResource(resources, it) }
     private val density = resources.displayMetrics.density
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
@@ -174,13 +174,16 @@ private class CatWidgetView(context: Context, private val preferences: android.c
     private var showClock = true
     private var showBattery = true
     private var lastInteraction = System.currentTimeMillis()
+    private var cuddleStarted = 0L
     private var cuddleUntil = 0L
     private var lastFrame = 0
     private var targetFrame = 0
     private var transitionStarted = 0L
+    private var transitionDuration = 420L
     private var lastBlink = System.currentTimeMillis() + 6_000L
     private var previousTick = System.currentTimeMillis()
     private var happyUntil = 0L
+    private var happyStarted = 0L
     private var nextHappyMoment = System.currentTimeMillis() + 12_000L
 
     private val animator = object : Runnable {
@@ -218,47 +221,62 @@ private class CatWidgetView(context: Context, private val preferences: android.c
 
     fun playCuddle() {
         lastInteraction = System.currentTimeMillis()
-        cuddleUntil = lastInteraction + 1_800L
-        transitionTo(3)
+        cuddleStarted = lastInteraction
+        cuddleUntil = lastInteraction + 2_400L
+        transitionTo(1, 250L)
     }
 
     private fun chooseMood() {
         val now = System.currentTimeMillis()
         if (now < cuddleUntil) {
-            transitionTo(3)
+            val elapsed = now - cuddleStarted
+            transitionTo(when {
+                elapsed < 700L -> 1 // paw-to-face greeting
+                elapsed < 1_500L -> 2 // playful paws-up pose
+                else -> 3 // content, eyes-closed cuddle
+            }, 250L)
             return
         }
         val next = when {
             battery < 20 && status != BatteryManager.BATTERY_STATUS_CHARGING -> 4
-            status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL -> {
+            status == BatteryManager.BATTERY_STATUS_CHARGING -> {
                 if (now >= nextHappyMoment && now >= happyUntil) {
-                    happyUntil = now + 1_100L
+                    happyStarted = now
+                    happyUntil = now + 2_100L
                     nextHappyMoment = now + 14_000L
                 }
-                if (now < happyUntil) 3 else 2
+                when {
+                    now >= happyUntil -> 2
+                    now - happyStarted < 700L -> 1
+                    now - happyStarted < 1_400L -> 2
+                    else -> 3
+                }
             }
-            now - lastInteraction > 60_000L -> 5
+            now - lastInteraction > 60_000L -> 3
+            status == BatteryManager.BATTERY_STATUS_FULL -> 2
             now < lastBlink -> 0
-            now - lastBlink < 360L -> 1
+            now - lastBlink < 360L -> 3
             else -> { lastBlink = now + 6_000L; 0 }
         }
         transitionTo(next)
     }
 
-    private fun transitionTo(frame: Int) {
+    private fun transitionTo(frame: Int, duration: Long = 420L) {
         if (targetFrame == frame) return
         lastFrame = targetFrame
         targetFrame = frame
         transitionStarted = System.currentTimeMillis()
+        transitionDuration = duration
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val now = System.currentTimeMillis()
-        val linearTransition = ((now - transitionStarted) / 420f).coerceIn(0f, 1f)
+        val linearTransition = ((now - transitionStarted) / transitionDuration.toFloat()).coerceIn(0f, 1f)
         val transition = linearTransition * linearTransition * (3f - 2f * linearTransition)
-        val breathe = if (targetFrame == 5) 0.004f else 0.009f
-        val pulse = kotlin.math.sin(now / if (targetFrame == 5) 1_500f else 1_050f).toFloat() * breathe
+        val sleeping = targetFrame == 3 && System.currentTimeMillis() - lastInteraction > 60_000L
+        val breathe = if (sleeping) 0.004f else 0.009f
+        val pulse = kotlin.math.sin(now / if (sleeping) 1_500f else 1_050f).toFloat() * breathe
         val width = width.toFloat()
         val height = height.toFloat()
         val pad = 4f * density
@@ -285,12 +303,8 @@ private class CatWidgetView(context: Context, private val preferences: android.c
         val w = catRect.width()
         val h = catRect.height()
         tailPath.reset()
-        tailPath.moveTo(left + w * 0.72f, top + h * 0.78f)
-        tailPath.cubicTo(left + w * 0.90f, top + h * 0.83f, left + w * 0.97f, top + h * 0.76f, left + w * 0.88f, top + h * 0.69f)
-        val happy = targetFrame == 2 || targetFrame == 3
-        val swish = kotlin.math.sin(System.currentTimeMillis() / 450f).toFloat() * if (happy) 2.0f else 0.55f
-        canvas.save()
-        canvas.rotate(swish, left + w * 0.74f, top + h * 0.78f)
+        tailPath.moveTo(left + w * 0.80f, top + h * 0.64f)
+        tailPath.cubicTo(left + w * 0.96f, top + h * 0.66f, left + w * 0.96f, top + h * 0.78f, left + w * 0.84f, top + h * 0.80f)
         linePaint.strokeWidth = 3.2f * density
         linePaint.color = Color.argb(100, 75, 66, 68)
         canvas.drawPath(tailPath, linePaint)
@@ -302,7 +316,6 @@ private class CatWidgetView(context: Context, private val preferences: android.c
         measure.getSegment(0f, measure.length * displayedBattery / 100f, fill, true)
         canvas.drawPath(fill, linePaint)
         linePaint.alpha = 255
-        canvas.restore()
     }
 
     private fun drawClock(canvas: Canvas) {
@@ -320,7 +333,7 @@ private class CatWidgetView(context: Context, private val preferences: android.c
         textPaint.textSize = 9f * density
         textPaint.color = Color.rgb(58, 48, 52)
         textPaint.setShadowLayer(2f * density, 0f, 1f * density, Color.WHITE)
-        canvas.drawText("$battery%", catRect.left + catRect.width() * 0.87f, catRect.top + catRect.height() * 0.89f, textPaint)
+        canvas.drawText("$battery%", catRect.left + catRect.width() * 0.89f, catRect.top + catRect.height() * 0.75f, textPaint)
         textPaint.clearShadowLayer()
     }
 
