@@ -39,6 +39,7 @@ class CatOverlayService : Service() {
             setPadding(dp(9), dp(5), dp(9), dp(5))
             background = PinkPill()
         }
+        @Suppress("DEPRECATION")
         val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY else WindowManager.LayoutParams.TYPE_PHONE
         params = WindowManager.LayoutParams(
