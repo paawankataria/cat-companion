@@ -134,7 +134,10 @@ class CatOverlayService : Service() {
 /** Draws a small cutout puppet; each limb, ear, eye and tail has an independent transform. */
 private class CatWidgetView(context: Context, private val preferences: android.content.SharedPreferences) : View(context) {
     private fun load(id: Int): Bitmap = BitmapFactory.decodeResource(
-        resources, id, BitmapFactory.Options().apply { inScaled = false }
+        resources, id, BitmapFactory.Options().apply {
+            inScaled = false
+            inSampleSize = 2
+        }
     )
 
     private val body = load(R.drawable.cat_rig_body)
