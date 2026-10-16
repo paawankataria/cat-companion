@@ -45,7 +45,7 @@ class MainActivity : Activity() {
             setPadding(dp(12), dp(10), dp(16), dp(10))
         }
         hero.addView(ImageView(this).apply {
-            setImageResource(R.drawable.cat_companion)
+            setImageResource(R.drawable.cat_rig_preview)
             scaleType = ImageView.ScaleType.FIT_CENTER
             contentDescription = "Your gray and white cat companion"
         }, LinearLayout.LayoutParams(dp(86), dp(96)))

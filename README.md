@@ -1,8 +1,8 @@
 # Cat Companion (Kotlin)
 
-A small, draggable cat overlay for OnePlus and other Android phones. It keeps the original cat artwork supplied for this project and uses its poses for animation. The time and a tail-shaped battery meter are on by default. The cat looks concerned below 20%, does happy paw poses while charging, and sleeps after a minute without interaction. Tap for a short paw-and-cuddle animation; press and hold to open settings. Drag to move it.
+A small, draggable cat overlay for OnePlus and other Android phones. Its layered gray-and-cream art with amber eyes is based on the supplied cat illustration. The torso, head expressions, front paws, and tail move independently. The time and a tail-shaped battery meter are on by default. The cat looks sad below 20%, does happy paw poses while charging, and sleeps after a minute without interaction. Tap for a short paw-and-cuddle animation; press and hold to open settings. Drag to move it.
 
-The overlay animates at 30 frames per second with eased pose transitions, gentle sine-wave breathing, and smoothly interpolated battery fill. Pick a soft accent color in settings. The transparent launcher icon shows only the cat.
+The overlay animates at 30 frames per second with eased head expressions, sine-wave breathing, a soft paw lift, a swishing tail, and smoothly interpolated battery fill. Pick a soft accent color in settings. The transparent launcher icon shows only the assembled cat.
 
 Android does not let ordinary apps replace the OxygenOS status-bar battery icon, so Cat Companion uses the **Display over other apps** permission to draw its floating cat. Weather is not included because it needs a weather provider and API key.
 

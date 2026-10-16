@@ -154,21 +154,41 @@ class CatOverlayService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 }
 
-/** Draws the supplied cat artwork and applies small, eased motion without replacing its design. */
+/** A tiny canvas rig: separate torso, paws, head expression, tail and battery fill. */
 private class CatWidgetView(context: Context, private val preferences: android.content.SharedPreferences) : View(context) {
-    private val frames = intArrayOf(
-        R.drawable.cat_animation_00, R.drawable.cat_animation_01, R.drawable.cat_animation_02,
-        R.drawable.cat_animation_03, R.drawable.cat_animation_04, R.drawable.cat_animation_05
-    ).map { android.graphics.BitmapFactory.decodeResource(resources, it) }
+    private fun load(drawable: Int) = android.graphics.BitmapFactory.decodeResource(
+        resources, drawable, android.graphics.BitmapFactory.Options().apply { inScaled = false }
+    )
+
+    private val body = load(R.drawable.cat_body_layer)
+    private val paws = load(R.drawable.cat_paws_layer)
+    private val hindPaws = load(R.drawable.cat_hind_paws_layer)
+    private val tail = load(R.drawable.cat_tail_layer)
+    private val heads = listOf(
+        load(R.drawable.cat_expression_neutral),
+        load(R.drawable.cat_expression_sad),
+        load(R.drawable.cat_expression_happy),
+        load(R.drawable.cat_expression_sleep)
+    )
     private val density = resources.displayMetrics.density
     private val imagePaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textAlign = Paint.Align.CENTER; typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL) }
+    private val tailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textAlign = Paint.Align.CENTER
+        typeface = android.graphics.Typeface.create("sans-serif-medium", android.graphics.Typeface.NORMAL)
+    }
     private val catRect = RectF()
+    private val bodyRect = RectF()
+    private val headRect = RectF()
+    private val pawsRect = RectF()
+    private val tailRect = RectF()
     private val tailPath = Path()
+
+    private enum class Mood { CALM, LOW_BATTERY, CHARGING, SLEEPING, CUDDLE }
+    private var mood = Mood.CALM
     private var battery = 0
-    private var displayedBattery = 0f
-    private var status = BatteryManager.BATTERY_STATUS_UNKNOWN
+    private var smoothBattery = 0f
+    private var batteryStatus = BatteryManager.BATTERY_STATUS_UNKNOWN
     private var accent = Color.rgb(177, 155, 217)
     private var tintStrength = 0.28f
     private var showClock = true
@@ -176,38 +196,38 @@ private class CatWidgetView(context: Context, private val preferences: android.c
     private var lastInteraction = System.currentTimeMillis()
     private var cuddleStarted = 0L
     private var cuddleUntil = 0L
-    private var lastFrame = 0
-    private var targetFrame = 0
-    private var transitionStarted = 0L
-    private var transitionDuration = 420L
-    private var lastBlink = System.currentTimeMillis() + 6_000L
-    private var previousTick = System.currentTimeMillis()
-    private var happyUntil = 0L
-    private var happyStarted = 0L
+    private var currentHead = 0
+    private var targetHead = 0
+    private var headTransitionStarted = 0L
+    private var headTransitionDuration = 420L
+    private var nextBlink = System.currentTimeMillis() + 6_000L
+    private var blinkUntil = 0L
     private var nextHappyMoment = System.currentTimeMillis() + 12_000L
+    private var happyStarted = 0L
+    private var previousFrameTime = System.currentTimeMillis()
 
     private val animator = object : Runnable {
         override fun run() {
             val now = System.currentTimeMillis()
-            val delta = (now - previousTick).coerceIn(1L, 100L)
-            previousTick = now
-            val batteryEase = 1f - kotlin.math.exp(-delta / 260f)
-            displayedBattery += (battery - displayedBattery) * batteryEase
-            chooseMood()
+            val elapsedMs = (now - previousFrameTime).coerceIn(1L, 100L)
+            previousFrameTime = now
+            val smoothing = 1f - kotlin.math.exp(-elapsedMs / 260f)
+            smoothBattery += (battery - smoothBattery) * smoothing
+            updateMood(now)
             invalidate()
             postDelayed(this, 33L)
         }
     }
 
     init {
-        contentDescription = "Animated cat with time and battery level. Tap to cuddle; hold for settings; drag to move."
+        contentDescription = "Animated cat with time and battery. Tap for a cuddle, hold for settings, drag to move."
         setLayerType(LAYER_TYPE_HARDWARE, null)
         post(animator)
     }
 
-    fun setBattery(level: Int, batteryStatus: Int) {
+    fun setBattery(level: Int, status: Int) {
         battery = level.coerceIn(0, 100)
-        status = batteryStatus
+        batteryStatus = status
         invalidate()
     }
 
@@ -220,120 +240,169 @@ private class CatWidgetView(context: Context, private val preferences: android.c
     }
 
     fun playCuddle() {
-        lastInteraction = System.currentTimeMillis()
-        cuddleStarted = lastInteraction
-        cuddleUntil = lastInteraction + 2_400L
-        transitionTo(1, 250L)
-    }
-
-    private fun chooseMood() {
         val now = System.currentTimeMillis()
-        if (now < cuddleUntil) {
-            val elapsed = now - cuddleStarted
-            transitionTo(when {
-                elapsed < 700L -> 1 // paw-to-face greeting
-                elapsed < 1_500L -> 2 // playful paws-up pose
-                else -> 3 // content, eyes-closed cuddle
-            }, 250L)
-            return
-        }
-        val next = when {
-            battery < 20 && status != BatteryManager.BATTERY_STATUS_CHARGING -> 4
-            status == BatteryManager.BATTERY_STATUS_CHARGING -> {
-                if (now >= nextHappyMoment && now >= happyUntil) {
-                    happyStarted = now
-                    happyUntil = now + 2_100L
-                    nextHappyMoment = now + 14_000L
-                }
-                when {
-                    now >= happyUntil -> 2
-                    now - happyStarted < 700L -> 1
-                    now - happyStarted < 1_400L -> 2
-                    else -> 3
-                }
-            }
-            now - lastInteraction > 60_000L -> 3
-            status == BatteryManager.BATTERY_STATUS_FULL -> 2
-            now < lastBlink -> 0
-            now - lastBlink < 360L -> 3
-            else -> { lastBlink = now + 6_000L; 0 }
-        }
-        transitionTo(next)
+        lastInteraction = now
+        cuddleStarted = now
+        cuddleUntil = now + 2_400L
     }
 
-    private fun transitionTo(frame: Int, duration: Long = 420L) {
-        if (targetFrame == frame) return
-        lastFrame = targetFrame
-        targetFrame = frame
-        transitionStarted = System.currentTimeMillis()
-        transitionDuration = duration
+    private fun updateMood(now: Long) {
+        val charging = batteryStatus == BatteryManager.BATTERY_STATUS_CHARGING
+        val nextMood = when {
+            now < cuddleUntil -> Mood.CUDDLE
+            battery < 20 && !charging -> Mood.LOW_BATTERY
+            now - lastInteraction > 60_000L -> Mood.SLEEPING
+            charging -> Mood.CHARGING
+            else -> Mood.CALM
+        }
+        if (nextMood != mood) {
+            mood = nextMood
+            if (mood == Mood.CHARGING) nextHappyMoment = now + 7_000L
+        }
+
+        if (mood == Mood.CHARGING && now >= nextHappyMoment) {
+            happyStarted = now
+            nextHappyMoment = now + 15_000L
+        }
+
+        if (mood == Mood.CALM && now >= nextBlink) {
+            blinkUntil = now + 300L
+            nextBlink = now + 7_000L
+        }
+
+        val expression = when (mood) {
+            Mood.LOW_BATTERY -> 1
+            Mood.CHARGING, Mood.CUDDLE -> 2
+            Mood.SLEEPING -> 3
+            Mood.CALM -> if (now < blinkUntil) 2 else 0
+        }
+        if (expression != targetHead) {
+            currentHead = targetHead
+            targetHead = expression
+            headTransitionStarted = now
+            headTransitionDuration = if (mood == Mood.CUDDLE) 240L else 420L
+        }
     }
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         val now = System.currentTimeMillis()
-        val linearTransition = ((now - transitionStarted) / transitionDuration.toFloat()).coerceIn(0f, 1f)
-        val transition = linearTransition * linearTransition * (3f - 2f * linearTransition)
-        val sleeping = targetFrame == 3 && System.currentTimeMillis() - lastInteraction > 60_000L
-        val breathe = if (sleeping) 0.004f else 0.009f
-        val pulse = kotlin.math.sin(now / if (sleeping) 1_500f else 1_050f).toFloat() * breathe
         val width = width.toFloat()
         val height = height.toFloat()
-        val pad = 4f * density
-        catRect.set(pad, pad + height * 0.015f + height * pulse, width - pad, height - pad)
-        canvas.save()
-        canvas.scale(1f + pulse * 0.3f, 1f + pulse, catRect.centerX(), catRect.centerY())
-        if (transition < 1f) {
-            imagePaint.alpha = ((1f - transition) * 255).toInt()
-            canvas.drawBitmap(frames[lastFrame], null, catRect, imagePaint)
-        }
-        imagePaint.alpha = (transition * 255).toInt()
-        canvas.drawBitmap(frames[targetFrame], null, catRect, imagePaint)
-        imagePaint.alpha = 255
-        canvas.restore()
+        val pad = 3f * density
+        catRect.set(pad, pad, width - pad, height - pad)
+        bodyRect.set(catRect.left + width * 0.15f, catRect.top + height * 0.38f, catRect.left + width * 0.82f, catRect.bottom)
+        headRect.set(catRect.left + width * 0.10f, catRect.top - height * 0.015f, catRect.left + width * 0.81f, catRect.top + height * 0.77f)
+        pawsRect.set(catRect.left + width * 0.27f, catRect.top + height * 0.57f, catRect.left + width * 0.66f, catRect.bottom + height * 0.02f)
+        tailRect.set(catRect.left + width * 0.60f, catRect.top + height * 0.57f, catRect.left + width * 0.94f, catRect.top + height * 0.98f)
 
-        drawTailBattery(canvas)
+        val sleeping = mood == Mood.SLEEPING
+        val breath = kotlin.math.sin(now / if (sleeping) 1_450f else 980f).toFloat() * if (sleeping) 0.006f else 0.012f
+        val happyElapsed = now - happyStarted
+        val happyMotion = mood == Mood.CHARGING && happyElapsed >= 0L && happyElapsed < 1_200L
+        val cuddleProgress = if (mood == Mood.CUDDLE) ((now - cuddleStarted) / 2_400f).coerceIn(0f, 1f) else 0f
+        val pawLift = when {
+            mood == Mood.CUDDLE -> kotlin.math.sin(Math.PI * cuddleProgress).toFloat() * 7f * density
+            happyMotion -> kotlin.math.sin((happyElapsed / 1_200f * Math.PI).toFloat()).coerceAtLeast(0f) * 4f * density
+            else -> 0f
+        }
+        val tailAngle = when (mood) {
+            Mood.CHARGING, Mood.CUDDLE -> kotlin.math.sin(now / 360f).toFloat() * 5f
+            Mood.LOW_BATTERY -> 3f
+            Mood.SLEEPING -> kotlin.math.sin(now / 1_700f).toFloat() * 1.2f
+            Mood.CALM -> kotlin.math.sin(now / 1_000f).toFloat() * 1.5f
+        }
+
+        drawTail(canvas, tailAngle)
+        canvas.save()
+        canvas.scale(1f + breath * 0.3f, 1f + breath, bodyRect.centerX(), bodyRect.bottom)
+        canvas.drawBitmap(body, null, bodyRect, imagePaint)
+        canvas.restore()
+        canvas.drawBitmap(hindPaws, null, catRect, imagePaint)
+        drawHead(canvas, now)
+        val liftedPaws = RectF(pawsRect).apply { offset(0f, -pawLift) }
+        canvas.drawBitmap(paws, null, liftedPaws, imagePaint)
         if (showClock) drawClock(canvas)
-        if (showBattery) drawPercent(canvas)
+        if (showBattery) drawBatteryLevel(canvas)
     }
 
-    private fun drawTailBattery(canvas: Canvas) {
-        val left = catRect.left
-        val top = catRect.top
-        val w = catRect.width()
-        val h = catRect.height()
+    private fun drawTail(canvas: Canvas, angle: Float) {
+        val pivotX = tailRect.left + tailRect.width() * 0.34f
+        val pivotY = tailRect.top + tailRect.height() * 0.92f
+        canvas.save()
+        canvas.rotate(angle, pivotX, pivotY)
+        canvas.drawBitmap(tail, null, tailRect, imagePaint)
+        drawBatteryMeter(canvas)
+        canvas.restore()
+    }
+
+    private fun drawHead(canvas: Canvas, now: Long) {
+        val t = ((now - headTransitionStarted) / headTransitionDuration.toFloat()).coerceIn(0f, 1f)
+        val eased = t * t * (3f - 2f * t)
+        val tilt = when (mood) {
+            Mood.LOW_BATTERY -> 2f
+            Mood.CUDDLE -> kotlin.math.sin((now - cuddleStarted) / 340f).toFloat() * 2f
+            Mood.CHARGING -> kotlin.math.sin(now / 520f).toFloat() * 1.2f
+            Mood.SLEEPING -> kotlin.math.sin(now / 1_500f).toFloat() * 0.6f
+            Mood.CALM -> kotlin.math.sin(now / 1_300f).toFloat() * 0.5f
+        }
+        canvas.save()
+        canvas.rotate(tilt, headRect.centerX(), headRect.top + headRect.height() * 0.80f)
+        if (eased < 1f) {
+            imagePaint.alpha = ((1f - eased) * 255f).toInt()
+            canvas.drawBitmap(heads[currentHead], null, headRect, imagePaint)
+        }
+        imagePaint.alpha = (eased * 255f).toInt()
+        canvas.drawBitmap(heads[targetHead], null, headRect, imagePaint)
+        imagePaint.alpha = 255
+        canvas.restore()
+    }
+
+    private fun drawBatteryMeter(canvas: Canvas) {
         tailPath.reset()
-        tailPath.moveTo(left + w * 0.80f, top + h * 0.64f)
-        tailPath.cubicTo(left + w * 0.96f, top + h * 0.66f, left + w * 0.96f, top + h * 0.78f, left + w * 0.84f, top + h * 0.80f)
-        linePaint.strokeWidth = 3.2f * density
-        linePaint.color = Color.argb(100, 75, 66, 68)
-        canvas.drawPath(tailPath, linePaint)
-        linePaint.color = blend(Color.rgb(255, 249, 247), accent, tintStrength.coerceAtLeast(0.15f))
-        linePaint.alpha = 240
-        linePaint.strokeWidth = 2.4f * density
-        val measure = android.graphics.PathMeasure(tailPath, false)
+        tailPath.moveTo(tailRect.left + tailRect.width() * 0.34f, tailRect.top + tailRect.height() * 0.92f)
+        tailPath.cubicTo(
+            tailRect.left + tailRect.width() * 0.34f, tailRect.top + tailRect.height() * 0.68f,
+            tailRect.left + tailRect.width() * 0.42f, tailRect.top + tailRect.height() * 0.28f,
+            tailRect.left + tailRect.width() * 0.62f, tailRect.top + tailRect.height() * 0.25f
+        )
+        tailPath.cubicTo(
+            tailRect.left + tailRect.width() * 0.86f, tailRect.top + tailRect.height() * 0.20f,
+            tailRect.left + tailRect.width() * 0.93f, tailRect.top + tailRect.height() * 0.42f,
+            tailRect.left + tailRect.width() * 0.88f, tailRect.top + tailRect.height() * 0.60f
+        )
+        tailPath.cubicTo(
+            tailRect.left + tailRect.width() * 0.85f, tailRect.top + tailRect.height() * 0.75f,
+            tailRect.left + tailRect.width() * 0.74f, tailRect.top + tailRect.height() * 0.80f,
+            tailRect.left + tailRect.width() * 0.63f, tailRect.top + tailRect.height() * 0.79f
+        )
+        tailPaint.strokeWidth = 3f * density
+        tailPaint.color = Color.argb(90, 60, 52, 54)
+        canvas.drawPath(tailPath, tailPaint)
         val fill = Path()
-        measure.getSegment(0f, measure.length * displayedBattery / 100f, fill, true)
-        canvas.drawPath(fill, linePaint)
-        linePaint.alpha = 255
+        val measure = android.graphics.PathMeasure(tailPath, false)
+        measure.getSegment(0f, measure.length * smoothBattery / 100f, fill, true)
+        tailPaint.strokeWidth = 2.2f * density
+        tailPaint.color = blend(Color.rgb(255, 249, 247), accent, tintStrength.coerceAtLeast(0.15f))
+        canvas.drawPath(fill, tailPaint)
     }
 
     private fun drawClock(canvas: Canvas) {
         val use24Hour = preferences.getBoolean("use_24_hour", DateFormat.is24HourFormat(context))
         val format = if (use24Hour) "HH:mm" else "h:mm a"
         val clock = SimpleDateFormat(format, Locale.getDefault()).format(Date())
-        textPaint.textSize = 12f * density
+        textPaint.textSize = 11f * density
         textPaint.color = Color.rgb(58, 48, 52)
-        textPaint.setShadowLayer(2f * density, 0f, 1f * density, Color.WHITE)
-        canvas.drawText(clock, catRect.centerX(), catRect.top + catRect.height() * 0.70f, textPaint)
+        textPaint.setShadowLayer(2f * density, 0f, density, Color.WHITE)
+        canvas.drawText(clock, catRect.centerX(), catRect.top + catRect.height() * 0.58f, textPaint)
         textPaint.clearShadowLayer()
     }
 
-    private fun drawPercent(canvas: Canvas) {
-        textPaint.textSize = 9f * density
+    private fun drawBatteryLevel(canvas: Canvas) {
+        textPaint.textSize = 8f * density
         textPaint.color = Color.rgb(58, 48, 52)
-        textPaint.setShadowLayer(2f * density, 0f, 1f * density, Color.WHITE)
-        canvas.drawText("$battery%", catRect.left + catRect.width() * 0.89f, catRect.top + catRect.height() * 0.75f, textPaint)
+        textPaint.setShadowLayer(2f * density, 0f, density, Color.WHITE)
+        canvas.drawText("$battery%", tailRect.left + tailRect.width() * 0.78f, tailRect.top + tailRect.height() * 0.68f, textPaint)
         textPaint.clearShadowLayer()
     }
 
